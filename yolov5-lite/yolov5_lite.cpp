@@ -5,6 +5,7 @@
 #include "opencv2/imgproc.hpp"
 #include "opencv2/highgui.hpp"
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
+#include <onnxruntime/core/session/onnxruntime_c_api.h>
 
 typedef struct BoxInfo {
     float x1;
@@ -205,69 +206,63 @@ int main() {
     float h_scale = (float) image.rows / 416.f;
 
     std::string model_file("/Users/yang/CLionProjects/test_onnxruntime/yolov5-lite/v5Lite-s-sim-416.onnx");
-    Ort::Env env(ORT_LOGGING_LEVEL_INFO, "test_mac");
+    Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "test_mac");
     Ort::SessionOptions session_options;
     session_options.SetInterOpNumThreads(4);
     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     Ort::Session session(env, model_file.c_str(), session_options);
 
-    // 创建输入数组
-    std::vector<int64_t> input_tensor_dims = {1,3,416,416};  // 输入张量的维度
-    const size_t num_input_nodes = session.GetInputCount();
-    // 定义两个向量，用于存储输入节点的名称和维度信息
-    std::vector<Ort::AllocatedStringPtr> input_names_ptr;
-    std::vector<const char*> input_node_names;
-    // 预留足够的空间来存储所有输入节点的信息
-    input_names_ptr.reserve(num_input_nodes);
-    input_node_names.reserve(num_input_nodes);
+    // 输入输出计数
+    size_t input_size = session.GetInputCount();
+    size_t output_size = session.GetOutputCount();
 
-    // 获取输入节点的名称
-    for (size_t i = 0; i < num_input_nodes; ++i) {
-        input_names_ptr.emplace_back(session.GetInputNameAllocated(i, Ort::AllocatorWithDefaultOptions()));
-        input_node_names.emplace_back(input_names_ptr[i].get());
-    }
-    for(auto &i: input_node_names){
-        std::cout << std::string(i) << std::endl;
-    }
+    // 定义输入输出名字,纬度变量
+    std::vector<const char*> input_names;
+    std::vector<const char*> output_names;
+    std::vector<std::vector<int64_t>> input_node_dims;
+    std::vector<std::vector<int64_t>> output_node_dims;
 
-    // 获取输入节点的维度信息
-    Ort::TypeInfo input_type_info = session.GetInputTypeInfo(0);
-    const auto tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
-    std::vector<int64_t> input_node_dims = tensor_info.GetShape();
-    for(auto &i : input_node_dims){
-        std::cout << i << std::endl;
-    }
-
-    // 定义内存分配器
+    // 拿到输入输出名字和纬度,赋值给上述变量, onnxruntime 1.13 把GetInputName替换成了GetInputNameAllocated, 避免了内存泄漏问题
     Ort::AllocatorWithDefaultOptions allocator;
-
-    // 创建输入节点
-    std::vector<Ort::Value> input_tensors;
-    input_tensors.reserve(num_input_nodes);
-
-    for (size_t i = 0; i < num_input_nodes; ++i) {
-        // 将输入节点的信息包装成 Ort::Value
-        auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        std::vector<float> input_tensor_data(3*416*416);
-        cv::Mat image_channels[3];
-        cv::split(input_image, image_channels);
-        for (int j = 0; j < 3; j++) {
-            memcpy(input_tensor_data.data() + 416*416 * j, image_channels[j].data,416*416 * sizeof(float));
-        }
-
-        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(memory_info, input_tensor_data.data(), 3*416*416,
-                                                            input_node_dims.data(), 4);
-        input_tensors.push_back(input_tensor);
+    for(size_t i = 0; i < input_size; i++){
+        auto name_unique_ptr = session.GetInputNameAllocated(i, allocator);
+        auto name = name_unique_ptr.get();
+        input_names.push_back(name);
+        auto input_type_info = session.GetInputTypeInfo(i);
+        input_node_dims.push_back(input_type_info.GetTensorTypeAndShapeInfo().GetShape());
+    }
+    for(size_t i = 0; i < output_size; i++){
+        auto name_unique_ptr = session.GetOutputNameAllocated(i, allocator);
+        auto name = name_unique_ptr.get();
+        output_names.push_back(name);
+        auto output_type_info = session.GetOutputTypeInfo(i);
+        output_node_dims.push_back(output_type_info.GetTensorTypeAndShapeInfo().GetShape());
     }
 
-    // 创建输出节点
-//    std::vector<Ort::Value> output_tensors;
+    // cv::mat格式转vector,再转Ort::Value, yolov5-lite只有一个输入，所以只处理第一个
+    input_image.convertTo(input_image, CV_32F, 1.0 / 255);  //divided by 255
+    cv::Mat image_channels[3];
+    cv::split(input_image, image_channels);
+    std::vector<float> input_values;
+    // BGR2RGB, HWC->CHW
+    for (int i = 0; i < input_image.channels(); i++)
+    {
+        std::vector<float> data = std::vector<float>(image_channels[2 - i].reshape(1, input_image.cols * input_image.rows));
+        input_values.insert(input_values.end(), data.begin(), data.end());
+    }
+    // Ort::Value, 只处理第一个input, yolov5-lite只有一个输入
+    auto allocator_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
+    auto input_tensor = Ort::Value::CreateTensor<float>(allocator_info, input_values.data(), input_values.size(),input_node_dims[0].data(), input_node_dims[0].size());
 
-    // 使用会话运行机器学习模型
-//    Ort::RunOptions run_options;
-//    session.Run(run_options, input_node_names.data(), input_tensors.data(), num_input_nodes, output_node_names.data(), output_node_names.size(), output_tensors.data());
-
-
+    // 执行推理
+    for(auto& n : input_names){
+        std::cout << n << std::endl;
+    }
+    for(auto& n : output_names){
+        std::cout << n << std::endl;
+    }
+//    std::vector<Ort::Value> ort_outputs = session.Run(Ort::RunOptions{ nullptr }, input_names[0], &input_tensor, 1, output_names.data(), output_names.size());
+//    const float* preds = ort_outputs[0].GetTensorMutableData<float>();
 
 
     return 0;
