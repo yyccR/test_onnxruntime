@@ -1,5 +1,6 @@
 
 #include <iostream>
+#include "memory"
 #include "opencv2/core.hpp"
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc.hpp"
@@ -16,6 +17,7 @@ typedef struct BoxInfo {
     int label;
 } BoxInfo;
 
+using Yolov5LiteAnchor = std::vector<int>;
 
 const int coco_color_list[80][3] =
         {
@@ -195,6 +197,21 @@ void draw_coco_bboxes(const cv::Mat& bgr, const std::vector<BoxInfo>& bboxes)
 }
 
 
+void generate_anchors(const int target_height, const int target_width, std::vector<int> &strides, std::vector<Yolov5LiteAnchor> &anchors)
+{
+    for (auto stride : strides)
+    {
+        int num_grid_w = target_width / stride;
+        int num_grid_h = target_height / stride;
+        for (int g1 = 0; g1 < num_grid_h; ++g1)
+        {
+            for (int g0 = 0; g0 < num_grid_w; ++g0)
+            {
+                anchors.push_back((Yolov5LiteAnchor) {g0, g1, stride});
+            }
+        }
+    }
+}
 
 int main() {
 
@@ -225,16 +242,12 @@ int main() {
     // 拿到输入输出名字和纬度,赋值给上述变量, onnxruntime 1.13 把GetInputName替换成了GetInputNameAllocated, 避免了内存泄漏问题
     Ort::AllocatorWithDefaultOptions allocator;
     for(size_t i = 0; i < input_size; i++){
-        auto name_unique_ptr = session.GetInputNameAllocated(i, allocator);
-        auto name = name_unique_ptr.get();
-        input_names.push_back(name);
+        input_names.push_back(session.GetInputNameAllocated(i, allocator).release());
         auto input_type_info = session.GetInputTypeInfo(i);
         input_node_dims.push_back(input_type_info.GetTensorTypeAndShapeInfo().GetShape());
     }
     for(size_t i = 0; i < output_size; i++){
-        auto name_unique_ptr = session.GetOutputNameAllocated(i, allocator);
-        auto name = name_unique_ptr.get();
-        output_names.push_back(name);
+        output_names.push_back(session.GetOutputNameAllocated(i, allocator).release());
         auto output_type_info = session.GetOutputTypeInfo(i);
         output_node_dims.push_back(output_type_info.GetTensorTypeAndShapeInfo().GetShape());
     }
@@ -258,11 +271,80 @@ int main() {
     for(auto& n : input_names){
         std::cout << n << std::endl;
     }
+    for(auto& n: input_node_dims){
+        for(auto& i : n){
+            std::cout << i << std::endl;
+        }
+    }
     for(auto& n : output_names){
         std::cout << n << std::endl;
     }
-//    std::vector<Ort::Value> ort_outputs = session.Run(Ort::RunOptions{ nullptr }, input_names[0], &input_tensor, 1, output_names.data(), output_names.size());
-//    const float* preds = ort_outputs[0].GetTensorMutableData<float>();
+    for(auto& n: output_node_dims){
+        for(auto& i : n){
+            std::cout << i << std::endl;
+        }
+    }
+    std::vector<Ort::Value> ort_outputs = session.Run(Ort::RunOptions{ nullptr }, &input_names[0], &input_tensor, 1, output_names.data(), output_names.size());
+    // 拿到推理结果
+    const float* preds = ort_outputs[0].GetTensorMutableData<float>();
+
+    std::vector<BoxInfo> generate_boxes;
+    int n = 0, q = 0, i = 0, j = 0, k = 0; ///xmin,ymin,xamx,ymax,box_score,class_score
+    int num_class = 80;
+    const int nout = num_class + 5;
+    const float anchors[3][6] = { {10.0, 13.0, 16.0, 30.0, 33.0, 23.0}, {30.0, 61.0, 62.0, 45.0, 59.0, 119.0},{116.0, 90.0, 156.0, 198.0, 373.0, 326.0} };
+    const float stride[3] = { 8.0, 16.0, 32.0 };
+    float objThreshold = 0.6;
+    for (n = 0; n < 3; n++)   ///����ͼ�߶�
+    {
+        int num_grid_x = (int)(416 / stride[n]);
+        int num_grid_y = (int)(416 / stride[n]);
+        for (q = 0; q < 3; q++)    ///anchor
+        {
+            const float anchor_w = anchors[n][q * 2];
+            const float anchor_h = anchors[n][q * 2 + 1];
+            for (i = 0; i < num_grid_y; i++)
+            {
+                for (j = 0; j < num_grid_x; j++)
+                {
+                    float box_score = preds[4];
+                    if (box_score > objThreshold)
+                    {
+                        float class_score = 0;
+                        int class_ind = 0;
+                        for (k = 0; k < num_class; k++)
+                        {
+                            if (preds[k + 5] > class_score)
+                            {
+                                class_score = preds[k + 5];
+                                class_ind = k;
+                            }
+                        }
+                        //if (class_score > this->confThreshold)
+                        //{
+                        float cx = (preds[0] * 2.f - 0.5f + j) * stride[n];  ///cx
+                        float cy = (preds[1] * 2.f - 0.5f + i) * stride[n];   ///cy
+                        float w = powf(preds[2] * 2.f, 2.f) * anchor_w;   ///w
+                        float h = powf(preds[3] * 2.f, 2.f) * anchor_h;  ///h
+
+                        float xmin = (cx - 0.5 * w)*w_scale;
+                        float ymin = (cy - 0.5 * h)*h_scale;
+                        float xmax = (cx + 0.5 * w)*w_scale;
+                        float ymax = (cy + 0.5 * h)*h_scale;
+
+                        generate_boxes.push_back(BoxInfo{ xmin, ymin, xmax, ymax, class_score, class_ind });
+                        //}
+                    }
+                    preds += nout;
+                }
+            }
+        }
+    }
+
+    nms(generate_boxes,0.2);
+    draw_coco_bboxes(image, generate_boxes);
+    cv::waitKey(0);
+
 
 
     return 0;
