@@ -295,11 +295,11 @@ int main() {
     const float anchors[3][6] = { {10.0, 13.0, 16.0, 30.0, 33.0, 23.0}, {30.0, 61.0, 62.0, 45.0, 59.0, 119.0},{116.0, 90.0, 156.0, 198.0, 373.0, 326.0} };
     const float stride[3] = { 8.0, 16.0, 32.0 };
     float objThreshold = 0.6;
-    for (n = 0; n < 3; n++)   ///����ͼ�߶�
+    for (n = 0; n < 3; n++)
     {
         int num_grid_x = (int)(416 / stride[n]);
         int num_grid_y = (int)(416 / stride[n]);
-        for (q = 0; q < 3; q++)    ///anchor
+        for (q = 0; q < 3; q++)
         {
             const float anchor_w = anchors[n][q * 2];
             const float anchor_h = anchors[n][q * 2 + 1];
@@ -344,7 +344,6 @@ int main() {
     nms(generate_boxes,0.2);
     draw_coco_bboxes(image, generate_boxes);
     cv::waitKey(0);
-
 
 
     return 0;
