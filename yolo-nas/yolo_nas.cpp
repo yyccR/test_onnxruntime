@@ -260,10 +260,15 @@ static void generate_proposals(std::vector<GridAndStride> grid_strides, const fl
 
             BoxInfo box;
             const float *dis_after_sm = box_pred + i * 4;
-            box.x1 = (-dis_after_sm[0] + grid_strides[i].grid0) * grid_strides[i].stride;
-            box.y1 = (-dis_after_sm[1] + grid_strides[i].grid1) * grid_strides[i].stride;
-            box.x2 = (dis_after_sm[2] + grid_strides[i].grid0) * grid_strides[i].stride;
-            box.y2 = (dis_after_sm[3] + grid_strides[i].grid1) * grid_strides[i].stride;
+//            box.x1 = (-dis_after_sm[0] + grid_strides[i].grid0) * grid_strides[i].stride;
+//            box.y1 = (-dis_after_sm[1] + grid_strides[i].grid1) * grid_strides[i].stride;
+//            box.x2 = (dis_after_sm[2] + grid_strides[i].grid0) * grid_strides[i].stride;
+//            box.y2 = (dis_after_sm[3] + grid_strides[i].grid1) * grid_strides[i].stride;
+
+            box.x1 = dis_after_sm[0];
+            box.y1 = dis_after_sm[1];
+            box.x2 = dis_after_sm[2];
+            box.y2 = dis_after_sm[3];
 
             box.label = label;
             box.score = score;
