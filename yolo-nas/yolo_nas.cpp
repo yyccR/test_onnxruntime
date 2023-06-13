@@ -1,5 +1,4 @@
 
-
 #include <iostream>
 #include "memory"
 #include "opencv2/core.hpp"
@@ -12,7 +11,14 @@
 #include "../common/common.h"
 
 
-using Yolov5LiteAnchor = std::vector<int>;
+//using YoloNasAnchor = std::vector<int>;
+
+struct GridAndStride
+{
+    int grid0;
+    int grid1;
+    int stride;
+};
 
 const int coco_color_list[80][3] =
         {
@@ -192,7 +198,7 @@ void draw_coco_bboxes(const cv::Mat& bgr, const std::vector<BoxInfo>& bboxes)
 }
 
 
-void generate_anchors(const int target_height, const int target_width, std::vector<int> &strides, std::vector<Yolov5LiteAnchor> &anchors)
+void generate_anchors(const int target_height, const int target_width, std::vector<int> &strides, std::vector<GridAndStride> &anchors)
 {
     for (auto stride : strides)
     {
@@ -202,23 +208,85 @@ void generate_anchors(const int target_height, const int target_width, std::vect
         {
             for (int g0 = 0; g0 < num_grid_w; ++g0)
             {
-                anchors.push_back((Yolov5LiteAnchor) {g0, g1, stride});
+                anchors.push_back((GridAndStride) {g0, g1, stride});
             }
         }
     }
 }
 
-int test_yolov5_lite() {
+static void generate_proposals(std::vector<GridAndStride> grid_strides, const float* box_pred, const float* cls_pred, float prob_threshold, std::vector<BoxInfo>& boxes)
+{
+    const int num_points = grid_strides.size();
+    const int num_class = 80;
 
-    std::string image_file("/Users/yang/CLionProjects/test_onnxruntime/data/images/bus.jpeg");
+    for (int i = 0; i < num_points; i++)
+    {
+        const float* scores = cls_pred+i*num_class;
+
+        // find label with max score
+        int label = -1;
+        float score = -FLT_MAX;
+        for (int k = 0; k < num_class; k++)
+        {
+            float confidence = *(scores+k);
+            if (confidence > score)
+            {
+                label = k;
+                score = confidence;
+            }
+        }
+        if (score >= prob_threshold)
+        {
+
+//            float pred_ltrb[4];
+//            const float *dis_after_sm = box_pred + i * 4;
+//            pred_ltrb[0] = (-dis_after_sm[0] + grid_strides[i].grid0) * grid_strides[i].stride;
+//            pred_ltrb[1] = (-dis_after_sm[1] + grid_strides[i].grid1) * grid_strides[i].stride;
+//            pred_ltrb[2] = (dis_after_sm[2] + grid_strides[i].grid0) * grid_strides[i].stride;
+//            pred_ltrb[3] = (dis_after_sm[3] + grid_strides[i].grid1) * grid_strides[i].stride;
+//
+//
+//
+//            Object obj;
+//            obj.rect.x = (pred_ltrb[2] - pred_ltrb[0]) / 2;
+//            obj.rect.y = (pred_ltrb[3] - pred_ltrb[1]) / 2;
+//            obj.rect.width = pred_ltrb[2] - pred_ltrb[0];
+//            obj.rect.height = pred_ltrb[3] - pred_ltrb[1];
+//            obj.label = label;
+//            obj.prob = score;
+//            obj.mask_feat.resize(32);
+//            std::copy(pred.row(i) + 64 + num_class, pred.row(i) + 64 + num_class + 32, obj.mask_feat.begin());
+//            objects.push_back(obj);
+
+            BoxInfo box;
+            const float *dis_after_sm = box_pred + i * 4;
+            box.x1 = (-dis_after_sm[0] + grid_strides[i].grid0) * grid_strides[i].stride;
+            box.y1 = (-dis_after_sm[1] + grid_strides[i].grid1) * grid_strides[i].stride;
+            box.x2 = (dis_after_sm[2] + grid_strides[i].grid0) * grid_strides[i].stride;
+            box.y2 = (dis_after_sm[3] + grid_strides[i].grid1) * grid_strides[i].stride;
+
+            box.label = label;
+            box.score = score;
+//            obj.mask_feat.resize(32);
+//            std::copy(pred.row(i) + 64 + num_class, pred.row(i) + 64 + num_class + 32, obj.mask_feat.begin());
+            boxes.push_back(box);
+        }
+    }
+}
+
+int test_yolo_nas() {
+
+    int input_shape = 640;
+    std::string image_file("/Users/yang/CLionProjects/test_onnxruntime/data/images/traffic_road.jpg");
     cv::Mat image = cv::imread(image_file);
     cv::Mat input_image;
-    cv::resize(image, input_image, cv::Size(416,416));
+    cv::resize(image, input_image, cv::Size(input_shape,input_shape));
     input_image.convertTo(input_image, CV_32F, 1.0/255.0);
-    float w_scale = (float) image.cols / 416.f;
-    float h_scale = (float) image.rows / 416.f;
+    float w_scale = (float) image.cols / (float)input_shape;
+    float h_scale = (float) image.rows / (float)input_shape;
+    std::cout << "w_scale h_scale: " << w_scale << " " << h_scale << std::endl;
 
-    std::string model_file("/Users/yang/CLionProjects/test_onnxruntime/yolov5-lite/v5Lite-s-sim-416.onnx");
+    std::string model_file("/Users/yang/CLionProjects/test_onnxruntime/yolo-nas/yolo_nas_s.onnx");
     Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "test_mac");
     Ort::SessionOptions session_options;
     session_options.SetInterOpNumThreads(4);
@@ -244,16 +312,24 @@ int test_yolov5_lite() {
         input_names.push_back(session->GetInputNameAllocated(i, allocator).release());
         auto input_type_info = session->GetInputTypeInfo(i);
         input_node_dims.push_back(input_type_info.GetTensorTypeAndShapeInfo().GetShape());
+        std::cout << "input name: " << input_names[i] << std::endl;
+        for(auto& s: input_type_info.GetTensorTypeAndShapeInfo().GetShape()){
+            std::cout << "input shape: " << s << std::endl;
+        }
+
     }
     for(size_t i = 0; i < output_size; i++){
         output_names.push_back(session->GetOutputNameAllocated(i, allocator).release());
         auto output_type_info = session->GetOutputTypeInfo(i);
         output_node_dims.push_back(output_type_info.GetTensorTypeAndShapeInfo().GetShape());
+        std::cout << "output name: " << output_names[i] << std::endl;
+        for(auto& s: output_type_info.GetTensorTypeAndShapeInfo().GetShape()){
+            std::cout << "output shape: " << s << std::endl;
+        }
     }
 
     for(auto& n : input_names){std::cout << n << std::endl;}
     for(auto& n : output_names){std::cout << n << std::endl;}
-
 
     // 输入数据
     // cv::mat格式转vector,再转Ort::Value, yolov5-lite只有一个输入，所以只处理第一个
@@ -266,7 +342,7 @@ int test_yolov5_lite() {
         std::vector<float> data = std::vector<float>(image_channels[2 - i].reshape(1, input_image.cols * input_image.rows));
         input_values.insert(input_values.end(), data.begin(), data.end());
     }
-    // Ort::Value, 只处理第一个input, yolov5-lite只有一个输入
+    // Ort::Value, 只处理第一个input, yolo-nas只有一个输入
     auto allocator_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
     auto input_tensor = Ort::Value::CreateTensor<float>(allocator_info, input_values.data(), input_values.size(),input_node_dims[0].data(), input_node_dims[0].size());
 
@@ -274,59 +350,84 @@ int test_yolov5_lite() {
     // 推理
     std::vector<Ort::Value> ort_outputs = session->Run(Ort::RunOptions{ nullptr }, &input_names[0], &input_tensor, 1, output_names.data(), output_names.size());
     // 拿到推理结果
+    const float* box_preds = nullptr;
+    const float* cls_preds = nullptr;
+    for(int i=0; i < ort_outputs.size(); i++){
+        if(ort_outputs[i].GetTensorTypeAndShapeInfo().GetShape()[2] == 4){
+            box_preds = ort_outputs[i].GetTensorMutableData<float>();
+        }else{
+            cls_preds = ort_outputs[i].GetTensorMutableData<float>();
+        }
+    }
     const float* preds = ort_outputs[0].GetTensorMutableData<float>();
 
-    std::vector<BoxInfo> boxes;
     int num_classes = 80;
-    float conf_thres = 0.6;
-    float nms_thres = 0.2;
-    const int nout = num_classes + 5;
-    const float anchors[3][6] = { {10.0, 13.0, 16.0, 30.0, 33.0, 23.0}, {30.0, 61.0, 62.0, 45.0, 59.0, 119.0},{116.0, 90.0, 156.0, 198.0, 373.0, 326.0} };
-    const float stride[3] = { 8.0, 16.0, 32.0 };
-    for (int n = 0; n < 3; n++)
-    {
-        int num_grid_x = (int)(416 / stride[n]);
-        int num_grid_y = (int)(416 / stride[n]);
-        for (int q = 0; q < 3; q++)
-        {
-            const float anchor_w = anchors[n][q * 2];
-            const float anchor_h = anchors[n][q * 2 + 1];
-            for (int i = 0; i < num_grid_y; i++)
-            {
-                for (int j = 0; j < num_grid_x; j++)
-                {
-                    float box_score = preds[4];
-                    if (box_score > conf_thres)
-                    {
-                        float class_score = 0;
-                        int class_ind = 0;
-                        for (int k = 0; k < num_classes; k++)
-                        {
-                            if (preds[k + 5] > class_score)
-                            {
-                                class_score = preds[k + 5];
-                                class_ind = k;
-                            }
-                        }
-                        //if (class_score > this->confThreshold)
-                        //{
-                        float cx = (preds[0] * 2.f - 0.5f + j) * stride[n];  ///cx
-                        float cy = (preds[1] * 2.f - 0.5f + i) * stride[n];   ///cy
-                        float w = powf(preds[2] * 2.f, 2.f) * anchor_w;   ///w
-                        float h = powf(preds[3] * 2.f, 2.f) * anchor_h;  ///h
+    float conf_thres = 0.25;
+    float nms_thres = 0.5;
+    std::vector<int> strides = { 8, 16, 32 };
+    std::vector<GridAndStride> grid_strides;
+    generate_anchors(input_shape, input_shape, strides, grid_strides);
 
-                        float xmin = std::max(0.0,(cx - 0.5 * w)*w_scale);
-                        float ymin = std::max(0.0,(cy - 0.5 * h)*h_scale);
-                        float xmax = std::min((float)image.cols, (float)(cx + 0.5 * w)*w_scale);
-                        float ymax = std::min((float)image.rows, (float)(cy + 0.5 * h)*h_scale);
+    std::vector<BoxInfo> boxes;
+    generate_proposals(grid_strides, box_preds, cls_preds, conf_thres, boxes);
 
-                        boxes.push_back(BoxInfo{ xmin, ymin, xmax, ymax, class_score, class_ind });
-                        //}
-                    }
-                    preds += nout;
-                }
-            }
-        }
+//    const int nout = num_classes + 5;
+
+//    const float anchors[3][6] = { {10.0, 13.0, 16.0, 30.0, 33.0, 23.0}, {30.0, 61.0, 62.0, 45.0, 59.0, 119.0},{116.0, 90.0, 156.0, 198.0, 373.0, 326.0} };
+//    const float stride[3] = { 8.0, 16.0, 32.0 };
+
+
+//    for (int n = 0; n < 3; n++)
+//    {
+//        int num_grid_x = (int)(input_shape / stride[n]);
+//        int num_grid_y = (int)(input_shape / stride[n]);
+//        for (int q = 0; q < 3; q++)
+//        {
+//            const float anchor_w = anchors[n][q * 2];
+//            const float anchor_h = anchors[n][q * 2 + 1];
+//            for (int i = 0; i < num_grid_y; i++)
+//            {
+//                for (int j = 0; j < num_grid_x; j++)
+//                {
+//                    float box_score = preds[4];
+//                    if (box_score > conf_thres)
+//                    {
+//                        float class_score = 0;
+//                        int class_ind = 0;
+//                        for (int k = 0; k < num_classes; k++)
+//                        {
+//                            if (preds[k + 5] > class_score)
+//                            {
+//                                class_score = preds[k + 5];
+//                                class_ind = k;
+//                            }
+//                        }
+//                        //if (class_score > this->confThreshold)
+//                        //{
+//                        float cx = (preds[0] * 2.f - 0.5f + j) * stride[n];  ///cx
+//                        float cy = (preds[1] * 2.f - 0.5f + i) * stride[n];   ///cy
+//                        float w = powf(preds[2] * 2.f, 2.f) * anchor_w;   ///w
+//                        float h = powf(preds[3] * 2.f, 2.f) * anchor_h;  ///h
+//
+//                        float xmin = std::max(0.0,(cx - 0.5 * w)*w_scale);
+//                        float ymin = std::max(0.0,(cy - 0.5 * h)*h_scale);
+//                        float xmax = std::min((float)image.cols, (float)(cx + 0.5 * w)*w_scale);
+//                        float ymax = std::min((float)image.rows, (float)(cy + 0.5 * h)*h_scale);
+//
+//                        boxes.push_back(BoxInfo{ xmin, ymin, xmax, ymax, class_score, class_ind });
+//                        //}
+//                    }
+//                    preds += nout;
+//                }
+//            }
+//        }
+//    }
+
+    for(BoxInfo& box: boxes){
+        box.x1 = std::max(0.f,(float)(box.x1*w_scale));
+        box.y1 = std::max(0.f,(float)(box.y1*h_scale));
+        box.x2 = std::min((float)image.cols, (float)box.x2*w_scale);
+        box.y2 = std::min((float)image.rows, (float)box.y2*h_scale);
     }
 
     nms(boxes,nms_thres);
