@@ -2,7 +2,7 @@
 
 ### 1. yolo-nas-s (pytorch->onnx)
 
-![dog](/data/traffic_road_yolo-nas-s.jpg)
+![traffic](/data/images/traffic_road_yolo-nas-s.jpg)
 
 导出yolo-nas onnx模型, [更详细查看此处GitHub地址](https://github.com/Deci-AI/super-gradients):
 ```python
