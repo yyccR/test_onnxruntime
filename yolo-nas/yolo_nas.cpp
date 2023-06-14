@@ -437,7 +437,8 @@ int test_yolo_nas() {
 
     nms(boxes,nms_thres);
     draw_coco_bboxes(image, boxes);
-    cv::waitKey(0);
+//    cv::waitKey(0);
+    cv::imwrite("../data/images/traffic_road_yolo-nas-s.jpg", image);
 
 
     return 0;
