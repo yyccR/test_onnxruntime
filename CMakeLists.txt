@@ -58,13 +58,14 @@ set_target_properties(libucd PROPERTIES IMPORTED_LOCATION
 
 add_subdirectory(yolov5-lite)
 add_subdirectory(yolo-nas)
+add_subdirectory(silero-vad)
 
 add_executable(test_onnxruntime main.cpp)
 
 target_link_libraries(test_onnxruntime onnxruntime)
 #target_link_libraries(test_onnxruntime libcargs)
 #target_link_libraries(test_onnxruntime libespeak-ng)
-target_link_libraries(test_onnxruntime libkaldi-decoder-core)
+#target_link_libraries(test_onnxruntime libkaldi-decoder-core)
 target_link_libraries(test_onnxruntime libpiper_phonemize.1.2.0)
 #target_link_libraries(test_onnxruntime libpiper_phonemize.1)
 #target_link_libraries(test_onnxruntime libpiper_phonemize)
@@ -78,5 +79,6 @@ target_link_libraries(test_onnxruntime ${OpenCV_LIBS})
 target_link_libraries(test_onnxruntime ${yolo_nas_lib})
 target_link_libraries(test_onnxruntime ${yolov5_lite_lib})
 target_link_libraries(test_onnxruntime ${sherpa_onnx_lib})
+target_link_libraries(test_onnxruntime ${silero_vad_lib})
 
 
